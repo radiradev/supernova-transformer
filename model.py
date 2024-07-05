@@ -1,13 +1,37 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
+import math
+
+class FourierEmbedding(nn.Module):
+    def __init__(self, num_frequencies: int, max_freq: float = 10):
+        super().__init__()
+        self.num_frequencies = num_frequencies
+        self.frequencies = nn.Parameter(torch.linspace(1.0, max_freq, num_frequencies), requires_grad=False)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x shape: (batch_size, seq_len, 2)
+        batch_size, seq_len, _ = x.shape
+        
+        # Compute sin and cos for each frequency
+        x = x.unsqueeze(-1) * self.frequencies.view(1, 1, 1, -1) * 2 * math.pi
+        sin_x = torch.sin(x)
+        cos_x = torch.cos(x)
+        
+        # Concatenate sin and cos
+        embeddings = torch.cat([sin_x, cos_x], dim=-1)
+        
+        # Flatten the last two dimensions
+        return embeddings.view(batch_size, seq_len, -1)
+
 
 class TransformerNet(nn.Module):
     def __init__(self,
                  num_encoder_layers: int,
                  emb_size: int,
                  num_head: int,
-                 num_classes: int):
+                 num_classes: int,
+                 num_fourier_features: int = 10):
         super().__init__()
         
         # Initialise the Transformer encoder
@@ -19,7 +43,9 @@ class TransformerNet(nn.Module):
 
         # Embed adc and position
         self.adc_emb = nn.Linear(2, emb_size // 2)
-        self.pos_encoding = nn.Linear(2, emb_size // 2)
+        self.fourier_embedding = FourierEmbedding(num_fourier_features)
+        fourier_feature_size = num_fourier_features * 4  # 2 (sin, cos) * 2 (x, y)
+        self.pos_encoding = nn.Linear(fourier_feature_size, emb_size // 2)
         
         # Classification head
         self.classifier = nn.Sequential(
@@ -41,7 +67,8 @@ class TransformerNet(nn.Module):
         
         # Embed the ADC values
         adc_embed = self.adc_emb(adcs)
-        pos_embed = self.pos_encoding(positions)
+        fourier = self.fourier_embedding(positions)
+        pos_embed = self.pos_encoding(fourier)
         
         # Combine ADC embeddings and positional encoding
         x = torch.cat((adc_embed, pos_embed), dim=-1)
